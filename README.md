@@ -1,36 +1,43 @@
-# **ChanGather**
+# **PanchanScope**
 
 ## **Introduction**
-ChanGather is an open-source tool designed to **identify and map Panchan malware relay networks**. This project is for **educational purposes only**, created to analyze malicious infrastructures used by the Panchan malware. **The tool is not intended for malicious or illegal use.**
+PanchanScope is an open-source tool designed to **identify and map Panchan malware relay networks**. This project is for **educational purposes only**, created to analyze malicious infrastructures used by the Panchan malware. **The tool is not intended for malicious or illegal use.**
 
 I am not a professional cybersecurity expert but someone who is passionate about cybersecurity and enjoys exploring malware mechanisms. This project represents my curiosity and desire to learn while sharing knowledge with the community.
+
+> PanchanScope is the evolution of ChanGather: same goal, with multi-threaded crawling, geolocation/ASN enrichment, AS classification and an interactive live map.
 
 ---
 
 ## **Main Features**
-- **Relay Mapping**: Discovers other relays from a starting IP and port, recursively mapping the Panchan network.
-- **IP Extraction**: Parses relay responses to extract all associated IP addresses.
-- **Queue-Based Exploration**: Ensures efficient processing of all discovered relays while avoiding duplicates.
-- **Live Updates**: Displays the currently processed IP and the queue length in real-time.
-- **Exploration Statistics**: Summarizes the total relays discovered and visited at the end of the scan.
-- **Output File Support**: Saves all discovered IP addresses to an external file for further analysis.
+- **Recursive Relay Mapping**: Discovers other relays from one or more seed IPs and a port, recursively mapping the Panchan network.
+- **Multi-Threaded Crawling**: A pool of worker threads probes many relays in parallel, so large networks are mapped in minutes instead of hours.
+- **Discovery Tree**: Prints a clean tree of the seed, the relays it announces, and the relays found from those — each marked `alive` / `dead` / `pending`.
+- **Geo / ASN Enrichment**: Enriches every discovered IP with country, city, coordinates, ISP, org and AS number (via ip-api.com, no API key required).
+- **AS Classification**: Groups relays by their Autonomous System, so you can see which operators host the network and how it clusters.
+- **Live Web Map**: A built-in web server renders a real-time map in the browser — discovery tree, interactive graph, AS grouping, hub highlighting and per-node details.
+- **Exports**: Saves the result as a Graphviz DOT graph or a structured JSON dump (including AS groups), or exports directly from the web view.
+- **Offline Schema**: A companion script, `json2schema.py`, turns any JSON export into a standalone interactive HTML map — no server needed.
 
 ---
 
 ## **Prerequisites**
-Before using ChanGather, ensure you have the following:
+Before using PanchanScope, ensure you have the following:
 
 ### **Required Software**
 - **Python 3.8+**
 
 ### **Python Modules**
-The script uses standard Python libraries:
-- `re`
-- `socket`
-- `ipaddress`
-- `sys`
+PanchanScope uses mostly standard library modules (`re`, `socket`, `ipaddress`, `argparse`, `threading`, `queue`, `json`, `urllib`, `http.server`), plus one external dependency for nicer logging:
+- `loguru`
 
-No external dependencies are required.
+Install it with:
+```bash
+> pip install -r requirements.txt
+```
+
+### **Optional**
+- [Graphviz](https://graphviz.org/) (`dot`) — only needed to render a DOT export into a PNG/SVG image. The web view and `json2schema.py` do **not** require it.
 
 ---
 
@@ -41,49 +48,76 @@ No external dependencies are required.
    > cd changather
    ```
 
-2. Make the script executable:
+2. Install the dependency:
    ```bash
-   > chmod +x changather.py
+   > pip install -r requirements.txt
+   ```
+
+3. Make the script executable:
+   ```bash
+   > chmod +x panchanscope.py
    ```
 
 ---
 
 ## **Usage**
 ### **Command**
-Run the tool with the following command:
+PanchanScope now uses a flag-based command line:
 ```bash
-> ./changather.py <IP> <PORT> <OUTPUT_FILE>
+> ./panchanscope.py [host] [options]
 ```
 
 ### **Parameters**
-- `<IP>`: The starting IP address of the suspected Panchan relay (e.g., `192.168.1.100`).
-- `<PORT>`: The port number to connect to (e.g., `8080`).
-- `<OUTPUT_FILE>`: The file where all discovered IPs will be saved (e.g., `relays.txt`).
+- `host`: IP of a seed node to start from.
+- `-f, --file`: Text file with one seed IP per line (combine with or instead of `host`).
+- `-p, --port`: Panchan socket port (default: `1919`).
+- `-t, --timeout`: Socket timeout in seconds (default: `5`).
+- `-m, --max-nodes`: Maximum number of nodes to contact (anti-runaway safety).
+- `-T, --workers`: Number of parallel crawler threads (default: `20`).
+- `-o, --output`: Write a Graphviz DOT file of the graph.
+- `-j, --json`: Dump enriched node data to a JSON file.
+- `--no-enrich`: Skip the geo/ASN enrichment step.
+- `-w, --web`: Serve the live tree + graph in the browser.
+- `--web-host` / `--web-port`: Bind address / port for the live view (default: `0.0.0.0:8080`).
 
-### **Example**
+### **Examples**
 ```bash
-> ./changather.py 192.168.1.100 8080 relays.txt
+# Crawl from a single seed and print the discovery tree
+> ./panchanscope.py 192.168.1.100
+
+# Crawl from a list of seeds with 30 workers and serve the live web map
+> ./panchanscope.py -f seeds.txt -T 30 -w
+#   then open http://<host>:8080 in a browser
+
+# Crawl, then export both a DOT graph and a JSON dump
+> ./panchanscope.py -f seeds.txt -o network.dot -j network.json
+
+# Build a standalone interactive HTML map from a JSON export (no server, no Graphviz)
+> ./json2schema.py network.json -o schema.html
 ```
 
 ### **Output**
-- **Real-Time Logs**: Displays the last processed IP address and the queue length during the scan.
-- **Final Statistics**: Provides a summary of:
-  - Total unique IPs visited.
-  - Location of the output file containing all extracted relay IPs.
+- **Real-Time Logs**: Displays discovered relays live, plus the live web map when `-w` is used.
+- **Discovery Tree**: A terminal tree of the mapped network, with status and AS per node.
+- **Final Statistics**: Total nodes contacted, alive nodes, and edges discovered.
+- **Exports**: DOT / JSON files, or browser exports from the live view.
+
+> **Security note:** with `-w`, the web server listens on `0.0.0.0` by default. On a public server, restrict the port with your firewall, or bind to localhost (`--web-host 127.0.0.1`) and reach it through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 user@your-server`).
 
 ---
 
 ## **How It Works**
-1. **Initial Connection**: The tool connects to the specified IP and port using a TCP socket.
+1. **Initial Connection**: The tool connects to each IP on the Panchan socket (`1919/tcp` by default) using a TCP socket, across a pool of worker threads.
 2. **Data Analysis**: If the response contains the keyword `pan-chan`, the tool extracts all IP addresses from the response.
-3. **Recursive Discovery**: New IPs are added to a queue and recursively explored, mapping the relay network.
-4. **Output Saving**: All extracted IPs are written to the specified output file.
-5. **Completion**: The scan finishes when the queue is empty, and a summary of discovered relays is provided.
+3. **Recursive Discovery**: New IPs are queued and recursively explored, building the discovery tree and the interconnection graph of the relay network.
+4. **Enrichment & Classification**: Discovered IPs are enriched with geolocation and ASN data, then grouped by Autonomous System.
+5. **Visualization & Output**: Results are shown in the terminal tree and the live web map, and can be exported to DOT / JSON.
+6. **Completion**: The scan finishes when the queue is empty, and a summary of discovered relays is provided.
 
 ---
 
 ## **Disclaimer**
-ChanGather is designed **for educational and research purposes only**. I am not responsible for any misuse or illegal activities conducted with this tool. Always ensure compliance with your local laws regarding network analysis and cybersecurity research.
+PanchanScope is designed **for educational and research purposes only**. I am not responsible for any misuse or illegal activities conducted with this tool. Always ensure compliance with your local laws regarding network analysis and cybersecurity research.
 
 ---
 
